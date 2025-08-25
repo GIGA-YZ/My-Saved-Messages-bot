@@ -46,7 +46,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/mysections - List all your sections",
         parse_mode='Markdown'
     )
-    return ConversationHandler.END
 
 # Command to create a new section
 async def new_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,7 +163,6 @@ async def handle_section_choice(update: Update, context: ContextTypes.DEFAULT_TY
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text('Operation cancelled.')
     context.user_data.clear()
-    return ConversationHandler.END
 
 # Error handler
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
