@@ -6,6 +6,7 @@ from telegram.ext import (
     ContextTypes, ConversationHandler, CallbackQueryHandler
 )
 import sqlite3
+import atexit
 
 # Enable logging to see what's happening
 logging.basicConfig(
@@ -21,14 +22,29 @@ if not TOKEN:
     exit(1)
 
 # --- Database Setup ---
-conn = sqlite3.connect('sections_bot.db', check_same_thread=False)
-db = conn.cursor()
-# Create a better table structure
-db.execute('''CREATE TABLE IF NOT EXISTS sections
-             (user_id INTEGER, section_name TEXT)''')
-db.execute('''CREATE TABLE IF NOT EXISTS saved_items
-             (user_id INTEGER, section_name TEXT, item_name TEXT, message_data TEXT)''')
-conn.commit()
+def get_db_connection():
+    conn = sqlite3.connect('sections_bot.db', check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db_connection()
+    conn.execute('''CREATE TABLE IF NOT EXISTS sections
+                 (user_id INTEGER, section_name TEXT)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS saved_items
+                 (user_id INTEGER, section_name TEXT, item_name TEXT, message_data TEXT)''')
+    conn.commit()
+    conn.close()
+
+# Initialize database
+init_db()
+
+# Register cleanup function
+def cleanup():
+    # This will run when the program exits
+    pass
+
+atexit.register(cleanup)
 
 # --- Conversation States ---
 GETTING_NAME, GETTING_SECTION = range(2)
@@ -52,32 +68,51 @@ async def new_section(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Please provide a section name. Example: `/newsection Recipes`", parse_mode='Markdown')
         return
+        
     section_name = " ".join(context.args)
     user_id = update.effective_user.id
 
-    # Check if section already exists for this user
-    db.execute("SELECT 1 FROM sections WHERE user_id=? AND section_name=?", (user_id, section_name))
-    if db.fetchone():
-        await update.message.reply_text(f"Section '{section_name}' already exists!")
-        return
+    try:
+        conn = get_db_connection()
+        # Check if section already exists for this user
+        existing = conn.execute("SELECT 1 FROM sections WHERE user_id=? AND section_name=?", 
+                              (user_id, section_name)).fetchone()
+        
+        if existing:
+            await update.message.reply_text(f"Section '{section_name}' already exists!")
+            conn.close()
+            return
 
-    # Save the new section to the database
-    db.execute("INSERT INTO sections (user_id, section_name) VALUES (?, ?)", (user_id, section_name))
-    conn.commit()
-    await update.message.reply_text(f'✅ Section "{section_name}" created successfully!')
+        # Save the new section to the database
+        conn.execute("INSERT INTO sections (user_id, section_name) VALUES (?, ?)", 
+                   (user_id, section_name))
+        conn.commit()
+        conn.close()
+        
+        await update.message.reply_text(f'✅ Section "{section_name}" created successfully!')
+    except Exception as e:
+        logger.error(f"Error in new_section: {e}")
+        await update.message.reply_text("Sorry, something went wrong. Please try again.")
 
 # Command to list user's sections
 async def my_sections(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    db.execute("SELECT section_name FROM sections WHERE user_id=?", (user_id,))
-    sections = [row[0] for row in db.fetchall()]
+    
+    try:
+        conn = get_db_connection()
+        sections = conn.execute("SELECT section_name FROM sections WHERE user_id=?", 
+                              (user_id,)).fetchall()
+        conn.close()
 
-    if not sections:
-        await update.message.reply_text("You don't have any sections yet! Create one with `/newsection`", parse_mode='Markdown')
-        return
+        if not sections:
+            await update.message.reply_text("You don't have any sections yet! Create one with `/newsection`", parse_mode='Markdown')
+            return
 
-    section_list = "\n".join([f"• {name}" for name in sections])
-    await update.message.reply_text(f"**Your Sections:**\n{section_list}", parse_mode='Markdown')
+        section_list = "\n".join([f"• {row['section_name']}" for row in sections])
+        await update.message.reply_text(f"**Your Sections:**\n{section_list}", parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in my_sections: {e}")
+        await update.message.reply_text("Sorry, something went wrong. Please try again.")
 
 # Handle incoming messages: Links and forwarded messages
 async def handle_incoming(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -114,25 +149,32 @@ async def get_item_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['item_name_to_save'] = item_name
     user_id = update.effective_user.id
 
-    # Fetch the user's existing sections from the database
-    db.execute("SELECT section_name FROM sections WHERE user_id=?", (user_id,))
-    sections = [row[0] for row in db.fetchall()]
+    try:
+        conn = get_db_connection()
+        # Fetch the user's existing sections from the database
+        sections = conn.execute("SELECT section_name FROM sections WHERE user_id=?", 
+                              (user_id,)).fetchall()
+        conn.close()
 
-    if not sections:
-        await update.message.reply_text("You don't have any sections yet! Create one with `/newsection` first.", parse_mode='Markdown')
+        if not sections:
+            await update.message.reply_text("You don't have any sections yet! Create one with `/newsection` first.", parse_mode='Markdown')
+            return ConversationHandler.END
+
+        # Create an inline keyboard with the sections
+        keyboard = []
+        for row in sections:
+            keyboard.append([InlineKeyboardButton(row['section_name'], callback_data=f"section_{row['section_name']}")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            f"✏️ Name '{item_name}' saved. Now, choose a section:",
+            reply_markup=reply_markup
+        )
+        return GETTING_SECTION
+    except Exception as e:
+        logger.error(f"Error in get_item_name: {e}")
+        await update.message.reply_text("Sorry, something went wrong. Please try again.")
         return ConversationHandler.END
-
-    # Create an inline keyboard with the sections
-    keyboard = []
-    for section in sections:
-        keyboard.append([InlineKeyboardButton(section, callback_data=f"section_{section}")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.message.reply_text(
-        f"✏️ Name '{item_name}' saved. Now, choose a section:",
-        reply_markup=reply_markup
-    )
-    return GETTING_SECTION
 
 # Handle the user's section choice
 async def handle_section_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -145,18 +187,25 @@ async def handle_section_choice(update: Update, context: ContextTypes.DEFAULT_TY
     item_name = context.user_data.get('item_name_to_save')
     message_data = context.user_data.get('message_data_to_save')
 
-    # Save everything to the database
-    db.execute("INSERT INTO saved_items (user_id, section_name, item_name, message_data) VALUES (?, ?, ?, ?)",
-               (user_id, chosen_section, item_name, message_data))
-    conn.commit()
+    try:
+        # Save everything to the database
+        conn = get_db_connection()
+        conn.execute("INSERT INTO saved_items (user_id, section_name, item_name, message_data) VALUES (?, ?, ?, ?)",
+                   (user_id, chosen_section, item_name, message_data))
+        conn.commit()
+        conn.close()
 
-    # Clean up the temporary data
-    context.user_data.pop('item_name_to_save', None)
-    context.user_data.pop('message_data_to_save', None)
+        # Clean up the temporary data
+        context.user_data.pop('item_name_to_save', None)
+        context.user_data.pop('message_data_to_save', None)
 
-    await query.edit_message_text(
-        text=f"✅ Perfect! I've saved '{item_name}' in the section '{chosen_section}'."
-    )
+        await query.edit_message_text(
+            text=f"✅ Perfect! I've saved '{item_name}' in the section '{chosen_section}'."
+        )
+    except Exception as e:
+        logger.error(f"Error in handle_section_choice: {e}")
+        await query.edit_message_text("Sorry, something went wrong while saving. Please try again.")
+    
     return ConversationHandler.END
 
 # Cancel command
