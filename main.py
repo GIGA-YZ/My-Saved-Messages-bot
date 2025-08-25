@@ -1,4 +1,5 @@
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters,
@@ -12,6 +13,12 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# Get token from environment variable (important for Render)
+TOKEN = os.environ.get('BOT_TOKEN')
+if not TOKEN:
+    logger.error("ERROR: BOT_TOKEN environment variable is not set!")
+    exit(1)
 
 # --- Database Setup ---
 conn = sqlite3.connect('sections_bot.db', check_same_thread=False)
@@ -168,9 +175,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 def main():
-    # Get token from environment variable (important for Render)
-    TOKEN = "7432768639:AAHhF4k7juq1YqT67IdNK3sa1QmaJ7lVvpY"  # We'll change this later for production
-
     # Create the Application
     application = Application.builder().token(TOKEN).build()
 
