@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: my-telegram-bot
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    python:
+      version: 3.10.12
